@@ -14,6 +14,8 @@ from Crypto.Cipher import DES
 
 app = Flask(__name__)
 
+gNEWKEYVERSION = 34
+gNEWKEY = unhexlify("0B0B0B0B0B0B0B0BD0D0D0D0D0D0D0D0")
 gKEY = unhexlify("404142434445464748494a4b4c4d4e4f")
 KEY_ENC = gKEY
 KEY_MAC = gKEY
@@ -28,6 +30,12 @@ gSMACIV = unhexlify("0000000000000000")
 gSDEKIV = unhexlify("0000000000000000")
 
 gHostChallenge = None
+
+def hexKeyVersion(version):
+    version = hex(version)[2:]
+    if(len(version) < 2):
+        version = "0" + version
+    return version
 
 def getKeyversion():
     version = hex(12)[2:]
@@ -87,8 +95,47 @@ def externalAuthenticate():
     tmpAPDU = "8482" + "01" + "0010" + hexlify(tmpHostCryptogram)
     tmpCMAC = hexlify(retailMac(gSMAC, gSMACIV, unhexlify(tmpAPDU)))
     tmpAPDU = tmpAPDU + tmpCMAC
+    gSMACIV = des_encrypt(gSMAC[0:8], DES3.MODE_ECB, None, unhexlify(tmpCMAC))
     return jsonify(s_enc=gSENC.encode('hex'), s_mac=gSMAC.encode('hex'), \
-            s_dek=gSDEK.encode('hex'), apdu=tmpAPDU)
+            s_dek=gSDEK.encode('hex'), apdu=tmpAPDU, cmaciv=hexlify(gSMACIV))
+
+@app.route('/tsm/put-key', methods=['GET'])
+def putKey():
+    global gSDEK
+    global gSMAC
+    global gSMACIV
+    global gNEWKEY
+    # TODO
+    # gSDEK = unhexlify("2D732997AB56280FCA377FCA0716CC07")
+    # gSMAC = unhexlify("F0FF2AB8B52A46151A4E21822B561D6F")
+    # gSMACIV = unhexlify("FFA281C528A9A015")
+    tmpMode = request.args.get('mode', None)
+    if tmpMode is None:
+        return "args error"
+    tmpMode = tmpMode.upper()
+    if tmpMode not in ['ADD', 'REPLACE']:
+        return "args error"
+    tmpEncryptKey = triple_des_encrypt(gSDEK, DES.MODE_ECB, None, gNEWKEY)
+    tmpKeyCheckValue = triple_des_encrypt(gNEWKEY, DES.MODE_ECB, None, unhexlify('00' * 8))
+    tmpKeyCheckValue = tmpKeyCheckValue[0:3]
+    tmpKeyData = "80" + "10" + \
+            hexlify(tmpEncryptKey) + \
+            "03" + \
+            hexlify(tmpKeyCheckValue)
+    tmpAPDU = "84" + "D8"
+    if tmpMode == "ADD":
+        tmpAPDU += "00"
+    elif tmpMode == "REPLACE":
+        tmpAPDU += hexKeyVersion(gNEWKEYVERSION)
+    else:
+        return "args error"
+    tmpAPDU += "81" + "4B"
+    tmpAPDU += hexKeyVersion(gNEWKEYVERSION)
+    tmpAPDU += tmpKeyData * 3
+    tmpCMAC = retailMac(gSMAC, gSMACIV, unhexlify(tmpAPDU))
+    gSMACIV = des_encrypt(gSMAC[0:8], DES3.MODE_ECB, None, tmpCMAC)
+    tmpAPDU += hexlify(tmpCMAC)
+    return jsonify(apdu=tmpAPDU, cmaciv=hexlify(gSMACIV))
 
 def retailMac(key, iv, data):
     paddingSize = 8 - (len(data) % 8)
@@ -102,6 +149,13 @@ def retailMac(key, iv, data):
     lastblock = des.decrypt(lastblock)
     des = DES.new(key[0:8], DES.MODE_ECB)
     return des.encrypt(lastblock)
+
+def des_encrypt(key, mode, iv, data):
+    if iv is None:
+        des = DES.new(key, mode)
+    else:
+        des = DES.new(key, mode, iv)
+    return des.encrypt(data)
 
 def triple_des_encrypt(key, mode, iv, data):
     if iv is None:
