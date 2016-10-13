@@ -16,7 +16,11 @@ app = Flask(__name__)
 
 gNEWKEYVERSION = 34
 gNEWKEY = unhexlify("0B0B0B0B0B0B0B0BD0D0D0D0D0D0D0D0")
+# gNEWKEY = unhexlify("BDBDBDBDBDBDBDBDDBDBDBDBDBDBDBDB")
+
+gKEYVERSION = 12
 gKEY = unhexlify("404142434445464748494a4b4c4d4e4f")
+# gKEY = unhexlify("0B0B0B0B0B0B0B0BD0D0D0D0D0D0D0D0")
 KEY_ENC = gKEY
 KEY_MAC = gKEY
 KEY_DEK = gKEY
@@ -38,10 +42,7 @@ def hexKeyVersion(version):
     return version
 
 def getKeyversion():
-    version = hex(12)[2:]
-    if(len(version) < 2):
-        version = "0" + version
-    return version
+    return hexKeyVersion(gKEYVERSION)
 
 def generateChallenge():
     return hexlify(Random.new().read(8))
@@ -99,16 +100,31 @@ def externalAuthenticate():
     return jsonify(s_enc=gSENC.encode('hex'), s_mac=gSMAC.encode('hex'), \
             s_dek=gSDEK.encode('hex'), apdu=tmpAPDU, cmaciv=hexlify(gSMACIV))
 
+@app.route('/tsm/delete-key', methods=['GET'])
+def delete():
+    global gSMAC
+    global gSMACIV
+    if hexKeyVersion(gNEWKEYVERSION).upper() == "0C":
+        return "Can not delete the test key!"
+    tmpAPDU = "84" + "E4" + "00" + "00"
+    tmpKeyDataField = "D0" + "01" + hexKeyVersion(gNEWKEYVERSION)
+    tmpAPDU = tmpAPDU + "0B" + tmpKeyDataField
+    tmpCMAC = hexlify(retailMac(gSMAC, gSMACIV, unhexlify(tmpAPDU)))
+    tmpAPDU = tmpAPDU + tmpCMAC + "00"
+    gSMACIV = des_encrypt(gSMAC[0:8], DES3.MODE_ECB, None, unhexlify(tmpCMAC))
+    # Force check dangerous
+    if tmpAPDU[12:14].upper() == "0C":
+        return "Can not delete the test key!"
+    return tmpAPDU
+
 @app.route('/tsm/put-key', methods=['GET'])
 def putKey():
     global gSDEK
     global gSMAC
     global gSMACIV
     global gNEWKEY
-    # TODO
-    # gSDEK = unhexlify("2D732997AB56280FCA377FCA0716CC07")
-    # gSMAC = unhexlify("F0FF2AB8B52A46151A4E21822B561D6F")
-    # gSMACIV = unhexlify("FFA281C528A9A015")
+    if getKeyversion().upper() == "0C":
+        return "Keep the test key!"
     tmpMode = request.args.get('mode', None)
     if tmpMode is None:
         return "args error"
@@ -126,7 +142,7 @@ def putKey():
     if tmpMode == "ADD":
         tmpAPDU += "00"
     elif tmpMode == "REPLACE":
-        tmpAPDU += hexKeyVersion(gNEWKEYVERSION)
+        tmpAPDU += getKeyversion()
     else:
         return "args error"
     tmpAPDU += "81" + "4B"
